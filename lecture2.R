@@ -42,5 +42,8 @@ lm.fit <- lm(vector.raster.table$MeanTempX100 ~ vector.raster.table$Elevation)
 png("correlationPlot.png", width = 2000, height=2000, res=300)
   smoothScatter( vector.raster.table$Elevation, vector.raster.table$MeanTempX100)
   abline(lm.fit, lwd=2, col="red")
-  
 dev.off()
+
+smoothScatter( vector.raster.table$Elevation, vector.raster.table$MeanTempX100)
+abline(lm.fit, lwd=2, col="red")
+
