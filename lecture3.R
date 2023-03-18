@@ -1,5 +1,7 @@
-library(terra)
-library(autocart)
+library(terra) 
+## "require" is like "library" but returns true/false,
+## false is returned if package does not exist
+if(!require(rminer)) install.packages("rminer")
 
 myVariables <- terra::rast("data/variables.tif") 
 
@@ -14,32 +16,70 @@ myVarRescale <- c( myVariables$Elevation+0 ,
 nsamples <- 2000
 sampled.Grid <- terra::spatSample(myVarRescale, 
                                   size=nsamples, 
-                                  method="random", 
-                                  cells=T)
+                                  method="random" )
+print(names(sampled.Grid))
+ 
 
-sampled.Grid$LONGITUDE <- terra::xFromCell(myVarRescale, sampled.Grid$cell)
-sampled.Grid$LATITUDE  <- terra::yFromCell(myVarRescale, sampled.Grid$cell)
+## use rminer package ( ?rminer::mining for info)  -----
+models=c("naive","ctree","rpart","kknn",
+         "mlp","mlpe","ksvm",
+         "randomForest","mr","mars",
+         "plsr")
+## prepare an empty list for storing accuracy metrics -----
+rmse <- c()
+rsquared <- c()
+bestmodel <- NULL
+for(model in models)
+{ 
+  M=rminer::mining(ndviX1000~.,data=sampled.Grid,method=c("holdout",2/3,12345),model=model)
+  ##get all accuracy metrics 
+  met <-mmetric(M, metric="ALL")
+  if( is.null(bestmodel) || met$RMSE < min( rmse ) ){
+    bestmodel<- model
+  }
+  
+  rmse  <- c(rmse, met$RMSE)
+  rsquared <- c(rsquared, met$R2)
+  cat("model:",model,"RMSE:",round(met$RMSE,digits=3),"\n")
+}
+names(rmse ) <- models
+names(rsquared ) <- models
 
-plot(sampled.Grid$LONGITUDE, sampled.Grid$LATITUDE)
+cat("Best model is: ", bestmodel, "... fitting...\n")
 
-response <- as.matrix(sampled.Grid$ndviX1000)
+## apply the best machine learning algo for regression (reg) -----
+FIT <- rminer::fit(ndviX1000~.,data=sampled.Grid, 
+            model=bestmodel, task = "reg" )
 
-predictors <- sampled.Grid
-predictors$ndviX1000 <- NULL
+# create a 10x smaller image to predict faster  -----
+myVarRescale.small <- terra::aggregate(myVarRescale, 10)
 
-locations <- as.matrix(cbind(sampled.Grid$LONGITUDE, sampled.Grid$LATITUDE))
+## predict the final NDVI raster using the model! -----
+predicted.NDVI <- terra::predict( myVarRescale.small,  
+                                  FIT, 
+                                  na.rm=T)
+ 
+  
+terra::writeRaster(predicted.NDVI, "myPredictedNDVIraster.tif", overwrite=T)
 
-numtraining <- round(0.5 * nsamples)
-training_index <- rep(FALSE, nsamples)
-training_index[1:numtraining] <- TRUE
-training_index <- sample(training_index)
+## calculate residuals using the original NDVI -----
+residualsNDVI <- predicted.NDVI - myVarRescale.small$ndviX1000
 
+## plot predicted NDVI and "errors", aka residuals   -----
+plot(predicted.NDVI)
+plot(residualsNDVI)
+## plot residuals in boxplot -----
+boxplot(residualsNDVI, outline=FALSE)
+## plot residuals distribution in histogram  -----
+hist(residualsNDVI, breaks=100, main="Residuals" )
+## calculate RMSE -----
+rmse <- sqrt(mean(residualsNDVI[]^2, na.rm=TRUE)) 
+## plot -----
+smoothScatter(y= predicted.NDVI[], x=myVarRescale.small$ndviX1000[],
+              ylab="Predicted NDVI", xlab="Measured NDVI",
+              asp=1, main= paste("RMSE: ", round(rmse,3)))
 
-
-train_response <- response[training_index]
-test_response <- response[!training_index]
-train_predictors <- predictors[training_index, ]
-test_predictors <- predictors[!training_index, ]
-train_locations <- locations[training_index, ]
-test_locations <- locations[!training_index, ]
+linear.fit <- lm(predicted.NDVI[] ~  myVarRescale.small$ndviX1000[])
+summary(linear.fit)
+abline(linear.fit, lwd=2, col="red")
 
